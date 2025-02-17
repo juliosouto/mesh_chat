@@ -169,3 +169,9 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Temp modules
+temp.py
+
+# MacOS
+.DS_Store
