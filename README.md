@@ -14,7 +14,7 @@ As of now, the application was manually tested on MacOS Sequoia, using Python 3.
 - Send and receive messages via the console.
 - Decentralized Mesh-based architecture, where each node can directly communicate with others without the need for central servers.
 - Automatic connection between nodes over the LAN.
-- Messages are encrypted and decrypted using Asymmetric encryption (RSA).
+- Messages are encrypted and decrypted using asymmetric encryption (RSA).
 
 ## Roadmap
 - Send messages through other nodes safely.
