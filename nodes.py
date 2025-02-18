@@ -1,12 +1,14 @@
 
+import base64
+from collections import defaultdict
 import json
 from queue import Queue
 import socket
-import sys
 import time
 
 from config import Config
-from messages import InboundMessage, OutboundMessage, Message
+from messages import (
+    InboundMessage, Message, Handshake)
 from utils import run_on_thread, ip_to_int, int_to_ip, str_to_hash
 
 
@@ -43,8 +45,8 @@ class Node:
         """
 
         self.server_socket = None
-        self.peers = {}
         self.talking_to = None  # Current conversation with
+        self.peers = defaultdict(dict)
 
     
     def start_server(self):
@@ -59,7 +61,57 @@ class Node:
     def register_peer(self, host_id: str, conn: socket.socket):
         """xxx"""
 
-        self.peers[host_id] = conn
+        self.peers[host_id]['conn'] = conn
+
+    
+    def can_add_new_peer(self) -> bool:
+        """
+        Check if the peers limit was reached or exceeded.
+
+        :return: True if yes, False if no
+        :rtype: bool
+        """
+
+        if len(self.peers.keys()) >= Config.MAX_PEERS_PER_NODE:
+            return False
+        return True
+    
+
+    def handshake(self, mode: str, conn: socket.socket, data: dict=None):
+        """_summary_
+
+        :param mode: 'request' or 'accept'.
+        :type mode: str
+        :return: _description_
+        :rtype: _type_
+        """
+        
+        # Validate
+        if not isinstance(mode, str):
+            raise TypeError('The argumnent <mode> must be of type <str>.')
+        if mode != 'request' and mode != 'accept':
+            raise ValueError('The argumnent <mode> must be "request" or "accept".')
+
+        # Request handshake
+        if mode == 'request':
+            data = {
+                'hello': Config.HELLO_MSG,
+                'host_id': Config.NODE_ID,
+                'pk': Config.SERIALIZED_PUBLIC_KEY,
+                'mode': mode
+            }
+            h = Handshake(data, conn)
+            if not h.is_valid:
+                raise ValueError("The handshake data isn't valid.")
+            h.request()
+            return True
+
+        # Accept handshake
+        elif mode == 'accept':
+            h = Handshake(data, conn)
+            if not h.is_valid:
+                return
+            return h.accept()
 
     
     @run_on_thread
@@ -69,8 +121,7 @@ class Node:
         """
         
         while True:
-            if len(self.peers.keys()) >= Config.MAX_PEERS_PER_NODE:
-                #print('Could not accept a new connection. Max Peers limit reached.')
+            if not self.can_add_new_peer():
                 time.sleep(5)  # Wait time before trying again
                 continue
 
@@ -78,37 +129,31 @@ class Node:
 
             try:
                 msg = conn.recv(1024)  # Reads up to 1024 bytes
-                data = self.validate_peer(msg.decode())
-                if not data:
-                    continue
-                
-                # Avoid accepting connections from itself
-                if data.get('host_id') == Config.NODE_ID:
+                data = json.loads(msg.decode())
+
+                # Avoid peers already connected
+                if data.get('host_id') in self.peers:
                     continue
 
+                # Accept the handshake
+                data = self.handshake('accept', conn, data)
+                if not data:
+                    continue
+
+                # Send a handshake response to confirm the acceptance
+                if not self.handshake('request', conn):
+                    return
+                
+                # Register the peer
                 self.register_peer(data.get('host_id'), conn)
                 print(f"Connection received from {addr}\n")
 
-                # Identify itself to the connected peer
-                conn.sendall(self.identify_itself().encode())
+                # Save the peer public key
+                self.peers[data.get('host_id')]['pk'] = data.get('pk').decode()
 
             except:
+                conn.close()
                 continue
-    
-
-    def identify_itself(self) -> str:
-        """
-        Identifies itself to the connected peer.
-
-        :return: The serialized JSON containing the host details.
-        :rtype: str
-        """
-
-        data = {
-            "message": Config.HELLO_MSG,
-            "host_id": Config.NODE_ID,
-        }
-        return json.dumps(data)
 
 
     def get_peer_list(self):
@@ -141,7 +186,7 @@ class Node:
         while True:
             
             # Make sure the MAX_PEERS_PER_NODE limit isn't exceeded
-            if len(self.peers.keys()) >= Config.MAX_PEERS_PER_NODE:
+            if not self.can_add_new_peer():
                 time.sleep(Config.WAIT_BETWEEN_SEARCHES)  # Wait n seconds before trying again
                 continue
             
@@ -151,7 +196,8 @@ class Node:
             if internet:
                 self.search_internet()
             
-            return  # disable
+            # Wait a bit before trying again
+            time.sleep(10)
 
 
     def search_lan(self, peer_ip: str='127.0.0.1', timeout: float=0.5) -> socket.socket | None:
@@ -255,26 +301,29 @@ class Node:
         :rtype: tuple[str, socket.socket] or None
         """
 
-        # Make sure the MAX_PEERS_PER_NODE limit isn't reached
-        if len(self.peers.keys()) >= Config.MAX_PEERS_PER_NODE:
+        # Make sure the MAX_PEERS_PER_NODE limit isn't exceeded
+        if not self.can_add_new_peer():
             return
         
         try:
             conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             conn.connect((peer_ip, port))
-            conn.sendall(self.identify_itself().encode())  # Hello message to the host
 
-            # Check if the host responds with a valid message
+            # Send a handshake
+            if not self.handshake('request', conn):
+                return
+
+            # Check if the host responds with a valid handshake
             for _ in range(100):
-                
                 host_msg = conn.recv(1024).decode()
                 if not host_msg:
                     continue
-                data = self.validate_peer(host_msg)
-                if not data:
-                    q.put(None)
-                    return
                 break
+
+            # Success
+                        
+            data = json.loads(host_msg)
+            self.peers[data.get('host_id')]['pk'] = base64.b64decode(data.get('pk')).decode()
             
             # If the connection is successful
             print(f'Located node on {peer_ip} : {port}\n')
@@ -287,7 +336,7 @@ class Node:
             return
         
 
-    def validate_peer(self, msg: str) -> dict:
+    def validate_peer(self, msg: str, handshake: bool=False) -> dict:
         """
         Validates the peer by checking its welcome message.
 
@@ -300,11 +349,20 @@ class Node:
 
         if not msg:
             return
-        if type(msg) is not str:
+        if not isinstance(msg, str):
             raise TypeError("The argument <msg> must be str")
         
         data = json.loads(msg)
 
+        # Handshake from peer
+        if handshake:
+            if not data.get('pk'):
+                return
+            if not data.get('host_id'):
+                return
+            return data
+
+        # Regular message from peer
         if data.get('message') != Config.HELLO_MSG:
             return
         if not data.get('host_id'):
@@ -330,18 +388,15 @@ class Node:
 
             for host_id in host_ids:
                 try:
-                    msg = self.peers.get(host_id).recv(1024)
+                    msg = self.peers.get(host_id).get('conn').recv(1024)
                     if not msg:
                         continue
 
                     # Instantiate a new InboundMessage
-                    m = InboundMessage(msg)
-                    m.decrypt()
-                    m.parse()
-                    is_valid = m.validate()
+                    m = InboundMessage(msg, self.peers, host_id)
+                    m.read()
 
-                    if not is_valid:
-                        #del m  # FIXME: Will affect the queues
+                    if not m.is_valid:
                         continue
                     
                     # If the user is not talking to anybody (first message)
@@ -388,7 +443,8 @@ class Node:
         :type talking_to: str
         """
 
-        if not type(talking_to) is str:
+        if not isinstance(talking_to, str):
             raise TypeError('The type of <talking_to> must be str.')
         self.talking_to = talking_to
+    
     

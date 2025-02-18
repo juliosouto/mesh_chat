@@ -3,6 +3,7 @@ import random
 import socket
 import uuid
 
+from c_keys import Rsa
 from utils import str_to_hash
 
 
@@ -18,8 +19,14 @@ class Config:
     INBOUND_PORT: int = None
     OUTBOUND_PORT: int = None
     MAX_PEERS_PER_NODE: int = 10
-    HELLO_MSG: str = 'Hello Peer, you are connected!'
+    HELLO_MSG: str = 'Hello, Peer!'  # Can only connect to peers with the same message (min of 10 chars)
     MSG_MAX_LENGTH: int = 565
+
+    # RSA keys
+    PRIVATE_KEY = None
+    PUBLIC_KEY = None
+    SERIALIZED_PRIVATE_KEY = None
+    SERIALIZED_PUBLIC_KEY = None
 
     # For tests
     USE_RANDOM_NODE_ID = True  # Useful when running 2 or more instances on the same machine
@@ -75,3 +82,16 @@ class Config:
                 return True
             except socket.error:
                 return False
+
+
+    @classmethod
+    def generate_rsa_keys(cls):
+        """
+        Generates the private and public RSA keys.
+        """
+
+        r = Rsa()
+        r.generate_keys()
+        cls.PRIVATE_KEY = r.get_private_key()
+        cls.PUBLIC_KEY = r.get_public_key()
+        cls.SERIALIZED_PUBLIC_KEY = r.get_serialized_public_key().decode()

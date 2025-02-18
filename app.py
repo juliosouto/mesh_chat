@@ -9,6 +9,7 @@ from nodes import Node
 def set_initial_config():
     """xxx"""
 
+    Config.generate_rsa_keys()
     Config.set_node_id()
     Config.set_test_config()  # Tests only
     Config.set_inbound_port()
@@ -66,12 +67,24 @@ def run():
             msg = f'@{node.get_talking_to()} {msg}'
 
         # Instantiate the OutboundMessage class
-        m = OutboundMessage(msg)
+        m = OutboundMessage(msg, node.peers, node.get_talking_to())
         if not m.is_valid:
             continue
-        
+
+        # xxx
         recipient_id = m.get_data().get('to')
-        conn = node.peers.get(recipient_id)
+        conn = node.peers.get(recipient_id).get('conn')
+        if not conn:
+            continue
+
+        # If the peer is directly connected to this node send directly to it
+        if conn:
+            m.send(conn)
+        
+        # If the peer is not directly connected to this node, forward to all connected peers
+        elif not conn:
+            for node_id in node.peers:
+                m.send(node.peers.get(node_id).get('conn'))
 
         # Print the messages
         if recipient_id != node.get_talking_to() and node.get_talking_to() is not None:
@@ -82,16 +95,7 @@ def run():
         elif recipient_id == node.get_talking_to():
             m.print_reply()
 
-        # If the peer is directly connected to this node send directly to it
-        if conn:
-            m.send(conn)
         
-        # If the peer is not directly connected to this node, forward to all connected peers
-        elif not conn:
-            for node_id, conn in node.peers.items():
-                m.send(conn)
-
-
 
 
 if __name__ == '__main__':

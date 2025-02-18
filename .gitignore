@@ -172,6 +172,15 @@ cython_debug/
 
 # Temp modules
 temp.py
+temp2.py
+temp3.py
+temp4.py
 
 # MacOS
 .DS_Store
+
+# Secrets
+/secrets/*
+
+# DB
+*.db
